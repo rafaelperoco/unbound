@@ -77,7 +77,7 @@ jobs:
       - name: Update Dockerfile to use specific release
         run: |
           # Update the Dockerfile to clone the specific release tag
-          sed -i "s|git clone --depth 1 https://github.com/NLnetLabs/unbound.git|git clone --depth 1 --branch ${{ needs.check-release.outputs.release_tag }} https://github.com/NLnetLabs/unbound.git|" Dockerfile
+          sed -i "s|git clone --depth 1 https://github.com/NLnetLabs/unbound.git|git clone --depth 1 --branch ${{ needs.check-release.outputs.release_tag }} https://github.com/NLnetLabs/unbound.git|" Dockerfile.distroless
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -113,6 +113,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: ./Dockerfile.distroless
           platforms: linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6
           push: true
           tags: ${{ steps.meta.outputs.tags }}

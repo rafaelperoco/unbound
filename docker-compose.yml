@@ -1,15 +1,13 @@
-version: '3.8'
-
 services:
   unbound:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.distroless
     container_name: unbound
     restart: unless-stopped
     ports:
-      - "53:53/tcp"
-      - "53:53/udp"
+      - "5300:53/tcp"
+      - "5300:53/udp"
     volumes:
       - ./config:/etc/unbound/conf.d:ro
       - unbound-data:/var/lib/unbound
@@ -17,9 +15,9 @@ services:
       - dns-network
     cap_add:
       - NET_ADMIN
-    sysctls:
-      - net.core.rmem_max=4194304
-      - net.core.wmem_max=4194304
+    # sysctls: (uncomment if supported by your Docker environment)
+    #   - net.core.rmem_max=4194304
+    #   - net.core.wmem_max=4194304
     environment:
       - TZ=America/Sao_Paulo
     logging:
@@ -43,4 +41,4 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.20.0.0/16
+        - subnet: 172.30.0.0/16
