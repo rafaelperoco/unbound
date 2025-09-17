@@ -2,7 +2,7 @@ services:
   unbound:
     build:
       context: .
-      dockerfile: Dockerfile.distroless
+      dockerfile: Dockerfile
     container_name: unbound
     restart: unless-stopped
     ports:

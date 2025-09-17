@@ -74,10 +74,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Update Dockerfile to use specific release
-        run: |
-          # Update the Dockerfile to clone the specific release tag
-          sed -i "s|git clone --depth 1 https://github.com/NLnetLabs/unbound.git|git clone --depth 1 --branch ${{ needs.check-release.outputs.release_tag }} https://github.com/NLnetLabs/unbound.git|" Dockerfile.distroless
+      # No need to update Dockerfile anymore - using build-args instead
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -113,13 +110,19 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile.distroless
+          file: ./Dockerfile
           platforms: linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          build-args: |
+            UNBOUND_VERSION=${{ needs.check-release.outputs.release_tag }}
+          cache-from: |
+            type=gha
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
+          cache-to: |
+            type=gha,mode=max
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
           provenance: true
           sbom: true
 

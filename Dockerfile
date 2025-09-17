@@ -1,7 +1,7 @@
-# Build stage
-FROM debian:bookworm-slim AS builder
+# Build stage - dependencies (cached layer)
+FROM debian:bookworm-slim AS deps
 
-# Install build dependencies
+# Install build dependencies - this layer is cached unless dependencies change
 RUN apt-get update && apt-get install -y \
     git \
     build-essential \
@@ -20,14 +20,28 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone Unbound repository
-WORKDIR /build
-RUN git clone --depth 1 https://github.com/NLnetLabs/unbound.git
+# Source fetch stage (separate to cache dependencies)
+FROM deps AS source
 
-# Build Unbound
+# Use ARG for version to allow build-time override
+ARG UNBOUND_VERSION=HEAD
+WORKDIR /build
+
+# Clone specific version or HEAD
+RUN if [ "$UNBOUND_VERSION" = "HEAD" ]; then \
+        git clone --depth 1 https://github.com/NLnetLabs/unbound.git; \
+    else \
+        git clone --depth 1 --branch $UNBOUND_VERSION https://github.com/NLnetLabs/unbound.git; \
+    fi
+
+# Build stage
+FROM source AS builder
+
 WORKDIR /build/unbound
+
+# Configure and build - separated for better caching
 RUN ./configure \
-    --prefix=/usr/local \
+    --prefix=/usr \
     --sysconfdir=/etc/unbound \
     --disable-static \
     --enable-dnstap \
@@ -36,14 +50,14 @@ RUN ./configure \
     --with-libevent \
     --with-libnghttp2 \
     --with-pthreads \
-    --with-ssl \
-    && make -j$(nproc) \
-    && make install DESTDIR=/install
+    --with-ssl
 
-# Final stage
-FROM debian:bookworm-slim
+RUN make -j$(nproc)
+RUN make install DESTDIR=/install
 
-# Install runtime dependencies
+# Runtime prep stage - prepare runtime dependencies
+FROM debian:bookworm-slim AS runtime-prep
+
 RUN apt-get update && apt-get install -y \
     libssl3 \
     libexpat1 \
@@ -51,96 +65,78 @@ RUN apt-get update && apt-get install -y \
     libnghttp2-14 \
     libprotobuf-c1 \
     ca-certificates \
-    dns-root-data \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Unbound binaries and libraries from builder
-COPY --from=builder /install/usr/local /usr/local
+# Copy binaries from builder
+COPY --from=builder /install/usr /usr
 COPY --from=builder /install/etc/unbound /etc/unbound
 
-# Create unbound user and group
-RUN groupadd -r unbound && useradd -r -g unbound -d /etc/unbound -s /sbin/nologin unbound
+# Create unbound user with specific UID/GID
+RUN groupadd -r -g 999 unbound && \
+    useradd -r -g unbound -u 999 -d /etc/unbound -s /sbin/nologin unbound
 
-# Create necessary directories
+# Create necessary directories and files
 RUN mkdir -p /etc/unbound/conf.d /var/lib/unbound && \
+    wget -O /etc/unbound/root.hints https://www.internic.net/domain/named.cache && \
+    echo ". IN DS 20326 8 2 E06D44B80B8F1D39A95C0B0D7C65D08458E880409BBC683457104237C7F8EC8D" > /var/lib/unbound/root.key && \
     chown -R unbound:unbound /etc/unbound /var/lib/unbound
 
-# Download root hints and generate root.key
-RUN wget -O /etc/unbound/root.hints https://www.internic.net/domain/named.cache && \
-    chown unbound:unbound /etc/unbound/root.hints && \
-    ldconfig /usr/local/lib && \
-    /usr/local/sbin/unbound-anchor -a /var/lib/unbound/root.key || true && \
-    [ -f /var/lib/unbound/root.key ] && chown unbound:unbound /var/lib/unbound/root.key || \
-    echo ". IN DS 20326 8 2 E06D44B80B8F1D39A95C0B0D7C65D08458E880409BBC683457104237C7F8EC8D" > /var/lib/unbound/root.key && \
-    chown unbound:unbound /var/lib/unbound/root.key
-
-# Create basic configuration
-RUN cat > /etc/unbound/unbound.conf << EOF
+# Create configuration
+RUN cat > /etc/unbound/unbound.conf << 'EOF'
 server:
-    # Network interface configuration
     interface: 0.0.0.0
     interface: ::0
     port: 53
-
-    # Access control
-    access-control: 0.0.0.0/0 refuse
     access-control: 127.0.0.0/8 allow
     access-control: 10.0.0.0/8 allow
     access-control: 172.16.0.0/12 allow
     access-control: 192.168.0.0/16 allow
     access-control: ::1 allow
-    access-control: ::ffff:127.0.0.1 allow
-
-    # Performance settings
     num-threads: 1
     msg-cache-slabs: 2
     rrset-cache-slabs: 2
     infra-cache-slabs: 2
     key-cache-slabs: 2
-
-    # Cache sizes
     rrset-cache-size: 256m
     msg-cache-size: 128m
-
-    # Security settings
     hide-identity: yes
     hide-version: yes
     harden-glue: yes
     harden-dnssec-stripped: yes
     harden-referral-path: yes
-
-    # DNSSEC
     auto-trust-anchor-file: "/var/lib/unbound/root.key"
     root-hints: "/etc/unbound/root.hints"
-
-    # Logging
     verbosity: 1
     logfile: ""
-
-    # Run as unbound user
-    username: "unbound"
+    username: ""
     directory: "/etc/unbound"
     chroot: ""
-
-    # Include additional configuration
     include: "/etc/unbound/conf.d/*.conf"
 EOF
 
-# Set ownership
 RUN chown unbound:unbound /etc/unbound/unbound.conf
 
-# Expose DNS ports
+# Final stage - distroless
+FROM gcr.io/distroless/cc-debian12:nonroot
+
+# Copy everything needed from runtime-prep
+COPY --from=runtime-prep --chown=999:999 /etc/unbound /etc/unbound
+COPY --from=runtime-prep --chown=999:999 /var/lib/unbound /var/lib/unbound
+COPY --from=runtime-prep /usr/sbin/unbound* /usr/sbin/
+COPY --from=runtime-prep /usr/lib/*-linux-gnu/libunbound* /usr/lib/
+COPY --from=runtime-prep /usr/lib/*-linux-gnu/libssl* /usr/lib/
+COPY --from=runtime-prep /usr/lib/*-linux-gnu/libcrypto* /usr/lib/
+COPY --from=runtime-prep /usr/lib/*-linux-gnu/libevent* /usr/lib/
+COPY --from=runtime-prep /usr/lib/*-linux-gnu/libexpat* /usr/lib/
+COPY --from=runtime-prep /usr/lib/*-linux-gnu/libnghttp2* /usr/lib/
+COPY --from=runtime-prep /usr/lib/*-linux-gnu/libprotobuf-c* /usr/lib/
+COPY --from=runtime-prep /etc/ssl /etc/ssl
+
+# Use numeric UID for nonroot user in distroless
+USER 999:999
+
 EXPOSE 53/tcp
 EXPOSE 53/udp
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD /usr/local/sbin/unbound-control status || exit 1
-
-# Run as unbound user
-USER unbound
-
-# Set entrypoint
-ENTRYPOINT ["/usr/local/sbin/unbound"]
-CMD ["-d", "-c", "/etc/unbound/unbound.conf"]
+ENTRYPOINT ["/usr/sbin/unbound", "-d", "-c", "/etc/unbound/unbound.conf"]
