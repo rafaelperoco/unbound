@@ -65,8 +65,8 @@ COPY --from=builder /usr/lib/libunbound* /usr/lib/
 COPY --from=builder /etc/unbound /etc/unbound
 
 # Create unbound user and group
-RUN addgroup -S unbound -g 999 && \
-    adduser -S -G unbound -u 999 -H -h /etc/unbound -s /sbin/nologin unbound
+RUN addgroup -g 999 unbound && \
+    adduser -D -G unbound -u 999 -H -h /etc/unbound -s /sbin/nologin unbound
 
 # Create necessary directories and download root hints
 RUN mkdir -p /etc/unbound/conf.d /var/lib/unbound && \
