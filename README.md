@@ -19,7 +19,7 @@ Automated Docker builds for [Unbound DNS](https://github.com/NLnetLabs/unbound) 
 ### Using Docker
 
 ```bash
-# Pull the latest image
+# Pull the latest image (Docker will automatically select the correct architecture)
 docker pull ghcr.io/rafaelperoco/unbound:latest
 
 # Run Unbound
@@ -29,6 +29,14 @@ docker run -d \
   -p 53:53/udp \
   ghcr.io/rafaelperoco/unbound:latest
 ```
+
+### Raspberry Pi
+
+Docker automatically selects the correct image for your Raspberry Pi model:
+- **Pi Zero/1**: Uses `linux/arm/v6`
+- **Pi 3** (32-bit OS): Uses `linux/arm/v7`
+- **Pi 3** (64-bit OS): Uses `linux/arm64`
+- **Pi 4/5**: Uses `linux/arm64` (recommended) or `linux/arm/v7` for 32-bit OS
 
 ### Using Docker Compose
 
@@ -84,8 +92,10 @@ The image is automatically rebuilt:
 ## Architecture Support
 
 Images are built for multiple architectures:
-- `linux/amd64` (x86_64)
-- `linux/arm64` (ARM 64-bit)
+- `linux/amd64` (x86_64) - Standard PCs and servers
+- `linux/arm64` (ARM 64-bit) - Raspberry Pi 4/5 (64-bit OS)
+- `linux/arm/v7` (ARM 32-bit) - Raspberry Pi 3/4 (32-bit OS)
+- `linux/arm/v6` (ARM 32-bit) - Raspberry Pi Zero/1
 
 ## Security Features
 
