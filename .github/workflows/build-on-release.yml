@@ -65,7 +65,7 @@ jobs:
     if: needs.check-release.outputs.new_release == 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write  # Changed from read to write for creating releases
       packages: write
       attestations: write
       id-token: write
@@ -100,7 +100,6 @@ jobs:
           tags: |
             type=raw,value=latest
             type=raw,value=${{ needs.check-release.outputs.release_tag }}
-            type=raw,value=release-${{ needs.check-release.outputs.release_tag }}
             type=sha,prefix={{branch}}-
           labels: |
             org.opencontainers.image.title=Unbound DNS
@@ -129,43 +128,3 @@ jobs:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: unbound-${{ needs.check-release.outputs.release_tag }}
-          name: Unbound ${{ needs.check-release.outputs.release_tag }}
-          body: |
-            ## Unbound DNS ${{ needs.check-release.outputs.release_tag }}
-
-            This release tracks the official [Unbound ${{ needs.check-release.outputs.release_tag }}](https://github.com/NLnetLabs/unbound/releases/tag/${{ needs.check-release.outputs.release_tag }}) release.
-
-            ### Docker Image
-
-            Pull the image:
-            ```bash
-            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.release_tag }}
-            ```
-
-            Or use the latest tag:
-            ```bash
-            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ```
-
-            ### Supported Platforms
-            - linux/amd64 (x86_64)
-            - linux/arm64 (ARM 64-bit - Raspberry Pi 4/5)
-            - linux/arm/v7 (ARM 32-bit - Raspberry Pi 3/4)
-            - linux/arm/v6 (ARM 32-bit - Raspberry Pi Zero/1)
-
-            ### Features
-            - Built from official source
-            - DNSSEC support
-            - DNSTap support
-            - CacheDB support
-            - Subnet support
-            - Multi-architecture support
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
