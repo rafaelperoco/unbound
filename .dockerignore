@@ -1,0 +1,32 @@
+# Git files
+.git
+.gitignore
+.github
+
+# Documentation
+README.md
+LICENSE
+
+# Config directory (will be mounted)
+config/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.log
+*.pid
+*.seed
+*.pid.lock
+
+# Docker files (for nested builds)
+Dockerfile.*
+docker-compose.*.yml

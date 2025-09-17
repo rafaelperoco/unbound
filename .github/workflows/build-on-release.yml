@@ -1,0 +1,156 @@
+name: Build and Push on Unbound Release
+
+on:
+  schedule:
+    # Check for new releases every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force build even if no new release'
+        type: boolean
+        required: false
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  check-release:
+    runs-on: ubuntu-latest
+    outputs:
+      new_release: ${{ steps.check.outputs.new_release }}
+      release_tag: ${{ steps.check.outputs.release_tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check for new Unbound release
+        id: check
+        run: |
+          # Get latest release from Unbound repository
+          LATEST_RELEASE=$(curl -s https://api.github.com/repos/NLnetLabs/unbound/releases/latest | jq -r '.tag_name')
+          echo "Latest Unbound release: $LATEST_RELEASE"
+
+          # Check if we've already built this release
+          EXISTING_TAG=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/users/${{ github.repository_owner }}/packages/container/${{ github.event.repository.name }}/versions" \
+            | jq -r '.[].metadata.container.tags[]' | grep -E "^release-${LATEST_RELEASE}$" || true)
+
+          if [ -z "$EXISTING_TAG" ] || [ "${{ github.event.inputs.force_build }}" == "true" ]; then
+            echo "New release found or force build requested"
+            echo "new_release=true" >> $GITHUB_OUTPUT
+            echo "release_tag=$LATEST_RELEASE" >> $GITHUB_OUTPUT
+          else
+            echo "Release $LATEST_RELEASE already built"
+            echo "new_release=false" >> $GITHUB_OUTPUT
+          fi
+
+  build-and-push:
+    needs: check-release
+    if: needs.check-release.outputs.new_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Update Dockerfile to use specific release
+        run: |
+          # Update the Dockerfile to clone the specific release tag
+          sed -i "s|git clone --depth 1 https://github.com/NLnetLabs/unbound.git|git clone --depth 1 --branch ${{ needs.check-release.outputs.release_tag }} https://github.com/NLnetLabs/unbound.git|" Dockerfile
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ needs.check-release.outputs.release_tag }}
+            type=raw,value=release-${{ needs.check-release.outputs.release_tag }}
+            type=sha,prefix={{branch}}-
+          labels: |
+            org.opencontainers.image.title=Unbound DNS
+            org.opencontainers.image.description=Unbound DNS resolver built from source
+            org.opencontainers.image.vendor=${{ github.repository_owner }}
+            org.opencontainers.image.source.upstream=https://github.com/NLnetLabs/unbound
+            org.opencontainers.image.version=${{ needs.check-release.outputs.release_tag }}
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: unbound-${{ needs.check-release.outputs.release_tag }}
+          name: Unbound ${{ needs.check-release.outputs.release_tag }}
+          body: |
+            ## Unbound DNS ${{ needs.check-release.outputs.release_tag }}
+
+            This release tracks the official [Unbound ${{ needs.check-release.outputs.release_tag }}](https://github.com/NLnetLabs/unbound/releases/tag/${{ needs.check-release.outputs.release_tag }}) release.
+
+            ### Docker Image
+
+            Pull the image:
+            ```bash
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.release_tag }}
+            ```
+
+            Or use the latest tag:
+            ```bash
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ```
+
+            ### Supported Platforms
+            - linux/amd64
+            - linux/arm64
+
+            ### Features
+            - Built from official source
+            - DNSSEC support
+            - DNSTap support
+            - CacheDB support
+            - Subnet support
+            - Multi-architecture support
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

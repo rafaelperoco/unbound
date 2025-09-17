@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  unbound:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: unbound
+    restart: unless-stopped
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+    volumes:
+      - ./config:/etc/unbound/conf.d:ro
+      - unbound-data:/var/lib/unbound
+    networks:
+      - dns-network
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.core.rmem_max=4194304
+      - net.core.wmem_max=4194304
+    environment:
+      - TZ=America/Sao_Paulo
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "/usr/local/sbin/unbound-control", "status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  unbound-data:
+    driver: local
+
+networks:
+  dns-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
