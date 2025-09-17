@@ -1,10 +1,6 @@
 name: Build and Push on Unbound Release
 
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - '.github/workflows/build-on-release.yml'
   schedule:
     # Check for new releases every 6 hours
     - cron: '0 */6 * * *'
@@ -15,6 +11,14 @@ on:
         type: boolean
         required: false
         default: false
+      specific_tag:
+        description: 'Specific Unbound tag to build (optional)'
+        type: string
+        required: false
+
+concurrency:
+  group: docker-build
+  cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
@@ -33,16 +37,21 @@ jobs:
       - name: Check for new Unbound release
         id: check
         run: |
-          # Get latest release from Unbound repository
-          LATEST_RELEASE=$(curl -s https://api.github.com/repos/NLnetLabs/unbound/releases/latest | jq -r '.tag_name')
-          echo "Latest Unbound release: $LATEST_RELEASE"
+          # Use specific tag if provided, otherwise get latest release
+          if [ -n "${{ github.event.inputs.specific_tag }}" ]; then
+            LATEST_RELEASE="${{ github.event.inputs.specific_tag }}"
+            echo "Using specific tag: $LATEST_RELEASE"
+          else
+            LATEST_RELEASE=$(curl -s https://api.github.com/repos/NLnetLabs/unbound/releases/latest | jq -r '.tag_name')
+            echo "Latest Unbound release: $LATEST_RELEASE"
+          fi
 
           # Check if we've already built this release
           EXISTING_TAG=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             "https://api.github.com/users/${{ github.repository_owner }}/packages/container/${{ github.event.repository.name }}/versions" \
             | jq -r '.[].metadata.container.tags[]' | grep -E "^release-${LATEST_RELEASE}$" || true)
 
-          if [ -z "$EXISTING_TAG" ] || [ "${{ github.event.inputs.force_build }}" == "true" ] || [ "${{ github.event_name }}" == "push" ]; then
+          if [ -z "$EXISTING_TAG" ] || [ "${{ github.event.inputs.force_build }}" == "true" ]; then
             echo "New release found or force build requested"
             echo "new_release=true" >> $GITHUB_OUTPUT
             echo "release_tag=$LATEST_RELEASE" >> $GITHUB_OUTPUT

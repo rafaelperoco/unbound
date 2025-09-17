@@ -15,6 +15,10 @@ on:
       - '.github/workflows/docker-build.yml'
   workflow_dispatch:
 
+concurrency:
+  group: docker-build
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
