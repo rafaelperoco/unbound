@@ -1,0 +1,125 @@
+# Build stage
+FROM alpine:3.19 AS builder
+
+# Install build dependencies
+RUN apk add --no-cache \
+    git \
+    build-base \
+    autoconf \
+    automake \
+    libtool \
+    pkgconf \
+    flex \
+    bison \
+    openssl-dev \
+    expat-dev \
+    libevent-dev \
+    nghttp2-dev \
+    protobuf-c-dev \
+    protobuf-c-compiler
+
+# Use ARG for version to allow build-time override
+ARG UNBOUND_VERSION=HEAD
+WORKDIR /build
+
+# Clone specific version or HEAD
+RUN if [ "$UNBOUND_VERSION" = "HEAD" ]; then \
+        git clone --depth 1 https://github.com/NLnetLabs/unbound.git; \
+    else \
+        git clone --depth 1 --branch $UNBOUND_VERSION https://github.com/NLnetLabs/unbound.git; \
+    fi
+
+# Build Unbound
+WORKDIR /build/unbound
+RUN ./configure \
+    --prefix=/usr \
+    --sysconfdir=/etc/unbound \
+    --disable-static \
+    --enable-dnstap \
+    --enable-cachedb \
+    --enable-subnet \
+    --with-libevent \
+    --with-libnghttp2 \
+    --with-pthreads \
+    --with-ssl \
+    && make -j$(nproc) \
+    && make install
+
+# Final stage
+FROM alpine:3.19
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    openssl \
+    expat \
+    libevent \
+    nghttp2-libs \
+    protobuf-c \
+    ca-certificates \
+    wget \
+    && rm -rf /var/cache/apk/*
+
+# Copy Unbound binaries from builder
+COPY --from=builder /usr/sbin/unbound* /usr/sbin/
+COPY --from=builder /usr/lib/libunbound* /usr/lib/
+COPY --from=builder /etc/unbound /etc/unbound
+
+# Create unbound user and group
+RUN addgroup -S unbound -g 999 && \
+    adduser -S -G unbound -u 999 -H -h /etc/unbound -s /sbin/nologin unbound
+
+# Create necessary directories and download root hints
+RUN mkdir -p /etc/unbound/conf.d /var/lib/unbound && \
+    wget -O /etc/unbound/root.hints https://www.internic.net/domain/named.cache && \
+    echo ". IN DS 20326 8 2 E06D44B80B8F1D39A95C0B0D7C65D08458E880409BBC683457104237C7F8EC8D" > /var/lib/unbound/root.key && \
+    chown -R unbound:unbound /etc/unbound /var/lib/unbound
+
+# Create configuration
+RUN cat > /etc/unbound/unbound.conf << 'EOF'
+server:
+    interface: 0.0.0.0
+    interface: ::0
+    port: 53
+    access-control: 127.0.0.0/8 allow
+    access-control: 10.0.0.0/8 allow
+    access-control: 172.16.0.0/12 allow
+    access-control: 192.168.0.0/16 allow
+    access-control: ::1 allow
+    num-threads: 1
+    msg-cache-slabs: 2
+    rrset-cache-slabs: 2
+    infra-cache-slabs: 2
+    key-cache-slabs: 2
+    rrset-cache-size: 256m
+    msg-cache-size: 128m
+    hide-identity: yes
+    hide-version: yes
+    harden-glue: yes
+    harden-dnssec-stripped: yes
+    harden-referral-path: yes
+    auto-trust-anchor-file: "/var/lib/unbound/root.key"
+    root-hints: "/etc/unbound/root.hints"
+    verbosity: 1
+    logfile: ""
+    username: "unbound"
+    directory: "/etc/unbound"
+    chroot: ""
+    include: "/etc/unbound/conf.d/*.conf"
+EOF
+
+RUN chown unbound:unbound /etc/unbound/unbound.conf
+
+# Expose DNS ports
+EXPOSE 53/tcp
+EXPOSE 53/udp
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD /usr/sbin/unbound-control status || exit 1
+
+# Run as unbound user
+USER unbound
+
+# Set entrypoint
+ENTRYPOINT ["/usr/sbin/unbound"]
+CMD ["-d", "-c", "/etc/unbound/unbound.conf"]

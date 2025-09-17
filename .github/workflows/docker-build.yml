@@ -5,18 +5,20 @@ on:
     branches: [ main ]
     paths:
       - 'Dockerfile'
+      - 'Dockerfile.alpine'
       - 'docker-compose.yml'
       - '.github/workflows/docker-build.yml'
   pull_request:
     branches: [ main ]
     paths:
       - 'Dockerfile'
+      - 'Dockerfile.alpine'
       - 'docker-compose.yml'
       - '.github/workflows/docker-build.yml'
   workflow_dispatch:
 
 concurrency:
-  group: docker-build
+  group: docker-build-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -24,7 +26,8 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build:
+  build-distroless:
+    name: Build Distroless (amd64/arm64)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -78,6 +81,74 @@ jobs:
           cache-to: |
             type=gha,mode=max
             type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+          provenance: ${{ github.event_name != 'pull_request' }}
+          sbom: ${{ github.event_name != 'pull_request' }}
+
+      - name: Generate artifact attestation
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  build-alpine:
+    name: Build Alpine (Raspberry Pi)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: |
+            suffix=-alpine
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value={{branch}}-{{date 'YYYYMMDD'}}-{{sha}},enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=rpi,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and push Alpine image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.alpine
+          platforms: linux/arm/v6,linux/arm/v7,linux/arm64,linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: |
+            type=gha
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-alpine
+          cache-to: |
+            type=gha,mode=max
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-alpine,mode=max
           provenance: ${{ github.event_name != 'pull_request' }}
           sbom: ${{ github.event_name != 'pull_request' }}
 
